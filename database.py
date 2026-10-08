@@ -116,7 +116,28 @@ class Database:
                 );
             """)
 
-            # 6. Search History & Activity Log
+            # 6. Deployed Lab Containers & Self-Healing Telemetry
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS deployed_labs (
+                    cve_id TEXT PRIMARY KEY,
+                    container_id TEXT,
+                    container_name TEXT,
+                    status TEXT, -- 'building', 'running', 'stopped', 'failed', 'repaired'
+                    deployment_type TEXT, -- 'vulhub' or 'ai_blueprint'
+                    host_port INTEGER,
+                    container_port INTEGER,
+                    workspace_path TEXT,
+                    dockerfile_content TEXT,
+                    repair_history TEXT,  -- JSON list of repair attempts
+                    health_status TEXT,   -- 'online', 'unreachable', 'unknown'
+                    audit_details TEXT,   -- JSON
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (cve_id) REFERENCES cves (cve_id) ON DELETE CASCADE
+                );
+            """)
+
+            # 7. Search History & Activity Log
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS search_history (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -125,9 +146,29 @@ class Database:
                 );
             """)
 
+            # 8. Case-Based Error Resolution Registry (Error Memory)
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS error_registry (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    error_signature TEXT UNIQUE,
+                    error_category TEXT,
+                    sample_error_text TEXT,
+                    fix_description TEXT,
+                    patch_instructions TEXT,
+                    patch_type TEXT DEFAULT 'dockerfile_patch',
+                    model_source TEXT,
+                    times_reused INTEGER DEFAULT 1,
+                    verified_working INTEGER DEFAULT 1,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    last_used TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                );
+            """)
+
             # Indexes for fast lookup
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_github_pocs_cve ON github_pocs(cve_id);")
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_exploit_intel_cve ON exploit_intelligence(cve_id);")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_deployed_labs_cve ON deployed_labs(cve_id);")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_error_reg_sig ON error_registry(error_signature);")
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_search_history_cve ON search_history(cve_id);")
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_search_history_time ON search_history(searched_at DESC);")
 
@@ -381,6 +422,183 @@ class Database:
             }
 
     # --------------------------------------------------------------------------
+    # Live Deployed Labs & Self-Healing Telemetry
+    # --------------------------------------------------------------------------
+    def save_lab_deployment(self, cve_id: str, deployment_data: Dict[str, Any]):
+        """Saves or updates active container deployment and self-healing telemetry."""
+        cve_clean = cve_id.upper().strip()
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                INSERT INTO deployed_labs (
+                    cve_id, container_id, container_name, status, deployment_type,
+                    host_port, container_port, workspace_path, dockerfile_content,
+                    repair_history, health_status, audit_details, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+                ON CONFLICT(cve_id) DO UPDATE SET
+                    container_id = excluded.container_id,
+                    container_name = excluded.container_name,
+                    status = excluded.status,
+                    deployment_type = excluded.deployment_type,
+                    host_port = excluded.host_port,
+                    container_port = excluded.container_port,
+                    workspace_path = excluded.workspace_path,
+                    dockerfile_content = excluded.dockerfile_content,
+                    repair_history = excluded.repair_history,
+                    health_status = excluded.health_status,
+                    audit_details = excluded.audit_details,
+                    updated_at = CURRENT_TIMESTAMP;
+            """, (
+                cve_clean,
+                deployment_data.get("container_id", ""),
+                deployment_data.get("container_name", ""),
+                deployment_data.get("status", "unknown"),
+                deployment_data.get("deployment_type", "ai_blueprint"),
+                deployment_data.get("host_port", 0),
+                deployment_data.get("container_port", 0),
+                deployment_data.get("workspace_path", ""),
+                deployment_data.get("dockerfile_content", ""),
+                json.dumps(deployment_data.get("repair_history", [])),
+                deployment_data.get("health_status", "unknown"),
+                json.dumps(deployment_data.get("audit_details", {}))
+            ))
+
+    def get_lab_deployment(self, cve_id: str) -> Optional[Dict[str, Any]]:
+        """Retrieves stored deployment record and self-healing log for a CVE."""
+        cve_clean = cve_id.upper().strip()
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT * FROM deployed_labs WHERE cve_id = ?;", (cve_clean,))
+            row = cursor.fetchone()
+            if not row:
+                return None
+            return {
+                "cve_id": row["cve_id"],
+                "container_id": row["container_id"],
+                "container_name": row["container_name"],
+                "status": row["status"],
+                "deployment_type": row["deployment_type"],
+                "host_port": row["host_port"],
+                "container_port": row["container_port"],
+                "workspace_path": row["workspace_path"],
+                "dockerfile_content": row["dockerfile_content"],
+                "repair_history": json.loads(row["repair_history"] or "[]"),
+                "health_status": row["health_status"],
+                "audit_details": json.loads(row["audit_details"] or "{}"),
+                "updated_at": str(row["updated_at"])
+            }
+
+    def delete_lab_deployment(self, cve_id: str) -> bool:
+        """Deletes deployment record for a CVE."""
+        cve_clean = cve_id.upper().strip()
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("DELETE FROM deployed_labs WHERE cve_id = ?;", (cve_clean,))
+            return cursor.rowcount > 0
+
+    def get_all_deployed_labs(self) -> List[Dict[str, Any]]:
+        """Returns all recorded lab deployments."""
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT * FROM deployed_labs ORDER BY updated_at DESC;")
+            records = []
+            for row in cursor.fetchall():
+                records.append({
+                    "cve_id": row["cve_id"],
+                    "container_id": row["container_id"],
+                    "container_name": row["container_name"],
+                    "status": row["status"],
+                    "deployment_type": row["deployment_type"],
+                    "host_port": row["host_port"],
+                    "container_port": row["container_port"],
+                    "health_status": row["health_status"],
+                    "updated_at": str(row["updated_at"])
+                })
+            return records
+
+    # --------------------------------------------------------------------------
+    # Case-Based Error Resolution Registry (Error Memory)
+    # --------------------------------------------------------------------------
+    def lookup_error_solution(self, error_signature: str) -> Optional[Dict[str, Any]]:
+        """Looks up a previously verified solution by error signature."""
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT * FROM error_registry
+                WHERE error_signature = ? AND verified_working = 1;
+            """, (error_signature,))
+            row = cursor.fetchone()
+            if not row:
+                return None
+            return {
+                "id": row["id"],
+                "error_signature": row["error_signature"],
+                "error_category": row["error_category"],
+                "sample_error_text": row["sample_error_text"],
+                "fix_description": row["fix_description"],
+                "patch_instructions": row["patch_instructions"],
+                "patch_type": row["patch_type"],
+                "model_source": row["model_source"],
+                "times_reused": row["times_reused"],
+                "created_at": str(row["created_at"])
+            }
+
+    def save_error_solution(
+        self,
+        error_signature: str,
+        error_category: str,
+        sample_error_text: str,
+        fix_description: str,
+        patch_instructions: str,
+        patch_type: str = "dockerfile_patch",
+        model_source: str = "AI Cascade"
+    ):
+        """Persists a new or updated error solution into the experience registry."""
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                INSERT INTO error_registry (
+                    error_signature, error_category, sample_error_text,
+                    fix_description, patch_instructions, patch_type,
+                    model_source, times_reused, verified_working, last_used
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, 1, 1, CURRENT_TIMESTAMP)
+                ON CONFLICT(error_signature) DO UPDATE SET
+                    fix_description = excluded.fix_description,
+                    patch_instructions = excluded.patch_instructions,
+                    times_reused = times_reused + 1,
+                    last_used = CURRENT_TIMESTAMP;
+            """, (
+                error_signature,
+                error_category,
+                sample_error_text[:1000],
+                fix_description,
+                patch_instructions,
+                patch_type,
+                model_source
+            ))
+
+    def increment_error_usage(self, error_signature: str):
+        """Increments reuse counter when a cached solution is successfully applied."""
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                UPDATE error_registry
+                SET times_reused = times_reused + 1, last_used = CURRENT_TIMESTAMP
+                WHERE error_signature = ?;
+            """, (error_signature,))
+
+    def get_all_error_solutions(self, limit: int = 50) -> List[Dict[str, Any]]:
+        """Returns all recorded error solutions in experience memory."""
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT * FROM error_registry
+                ORDER BY times_reused DESC, last_used DESC
+                LIMIT ?;
+            """, (limit,))
+            return [dict(row) for row in cursor.fetchall()]
+
+    # --------------------------------------------------------------------------
     # History & Platform Metrics
     # --------------------------------------------------------------------------
     def get_recent_searches(self, limit: int = 8) -> List[str]:
@@ -415,12 +633,20 @@ class Database:
             cursor.execute("SELECT COUNT(*) FROM ai_analysis;")
             total_ai = cursor.fetchone()[0]
 
+            cursor.execute("SELECT COUNT(*) FROM deployed_labs;")
+            total_deployed = cursor.fetchone()[0]
+
+            cursor.execute("SELECT COUNT(*) FROM error_registry;")
+            total_error_solutions = cursor.fetchone()[0]
+
             return {
                 "total_cves": total_cves,
                 "total_pocs": total_pocs,
                 "total_exploits": total_exploits,
                 "total_labs": total_labs,
-                "total_ai_analyses": total_ai
+                "total_ai_analyses": total_ai,
+                "total_deployed": total_deployed,
+                "total_error_solutions": total_error_solutions
             }
 
     def get_all_cves(self, limit: int = 50) -> List[Dict[str, Any]]:

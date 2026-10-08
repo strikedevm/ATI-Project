@@ -303,5 +303,77 @@ def apply_custom_css():
             color: #FACC15;
             border: 1px solid #EAB308;
         }
+        .badge-active {
+            background-color: rgba(16, 185, 129, 0.25);
+            color: #34D399;
+            border: 1px solid #10B981;
+        }
+        .badge-offline {
+            background-color: rgba(239, 68, 68, 0.2);
+            color: #F87171;
+            border: 1px solid #EF4444;
+        }
+        .badge-repaired {
+            background-color: rgba(245, 158, 11, 0.25);
+            color: #FBBF24;
+            border: 1px solid #F59E0B;
+        }
+        .docker-status-card {
+            background: rgba(15, 23, 42, 0.7);
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            border-radius: 10px;
+            padding: 12px 18px;
+            margin-bottom: 16px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+        }
+        .healing-card {
+            background: rgba(30, 27, 75, 0.6);
+            border: 1px solid rgba(139, 92, 246, 0.35);
+            border-radius: 10px;
+            padding: 14px 18px;
+            margin-top: 10px;
+            margin-bottom: 14px;
+        }
+        .audit-card {
+            background: rgba(6, 78, 59, 0.35);
+            border: 1px solid rgba(16, 185, 129, 0.4);
+            border-radius: 10px;
+            padding: 14px 18px;
+            margin-top: 10px;
+            margin-bottom: 14px;
+        }
+        .sandbox-card {
+            background: rgba(15, 23, 42, 0.85);
+            border: 1px solid rgba(56, 189, 248, 0.28);
+            border-radius: 12px;
+            padding: 16px 20px;
+            margin-bottom: 14px;
+            box-shadow: 0 4px 16px rgba(0, 0, 0, 0.25);
+        }
+        .iso-card {
+            background: rgba(24, 24, 27, 0.85);
+            border: 1px solid rgba(245, 158, 11, 0.35);
+            border-radius: 12px;
+            padding: 16px 20px;
+            margin-bottom: 14px;
+            box-shadow: 0 4px 18px rgba(0, 0, 0, 0.3);
+        }
+        .badge-ssh {
+            background-color: rgba(56, 189, 248, 0.2);
+            color: #38BDF8;
+            border: 1px solid #38BDF8;
+        }
+        .badge-memory {
+            background-color: rgba(168, 85, 247, 0.2);
+            color: #C084FC;
+            border: 1px solid #A855F7;
+        }
+        .badge-iso {
+            background-color: rgba(245, 158, 11, 0.2);
+            color: #FBBF24;
+            border: 1px solid #F59E0B;
+        }
         </style>
     """, unsafe_allow_html=True)

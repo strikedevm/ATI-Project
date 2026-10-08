@@ -5,3 +5,4 @@ mistralai==0.1.8
 python-dotenv==1.0.1
 pandas==2.2.1
 openai>=1.0.0
+docker>=7.0.0

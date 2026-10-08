@@ -11,6 +11,12 @@ from ai_generator import AIGenerator
 from styles import apply_custom_css
 from utils import format_json_output
 from database import db
+from docker_manager import docker_mgr
+from lab_verifier import verifier
+from error_healer import healer
+from error_registry import error_reg
+from ssh_sandbox import ssh_sandbox
+from os_archives import os_archives
 
 st.set_page_config(
     page_title="Vulnerability Lab Builder",
@@ -279,59 +285,449 @@ if cve_id:
             else:
                 st.info("Click 'Run AI Deep Threat Analysis' above to generate an executive briefing and technical evaluation.")
 
-        # --- TAB 3: LAB BUILDER ---
+        # --- TAB 3: LAB BUILDER (3-TIER PROVISIONING ENGINE) ---
         with tab_lab:
-            st.subheader("AI Automated Replication Sandbox Blueprint")
-            st.caption("Synthesizes Dockerfile blueprints and validation workflows via Multi-Provider Cascade")
-            
-            if vulhub_matches:
-                v_top = vulhub_matches[0]
+            st.subheader("Multi-Tier Replication Sandbox & Execution Engine")
+            st.caption("Tier 1: Docker/Vulhub Containers &bull; Tier 2: Remote Tri-OS SSH Sandboxes &bull; Tier 3: Legacy OS Archival Intelligence")
+
+            # 0. Case-Based Reasoning Error Memory Registry Telemetry
+            cached_errors = db.get_all_error_solutions()
+            num_cached_solutions = len(cached_errors)
+            total_reuses = sum(e.get("times_reused", 0) for e in cached_errors)
+
+            st.markdown(f"""
+                <div style="background: rgba(88, 28, 135, 0.25); border: 1px solid rgba(168, 85, 247, 0.4); border-radius: 10px; padding: 12px 18px; margin-bottom: 14px; display: flex; align-items: center; justify-content: space-between;">
+                    <div>
+                        <span class="badge-tag badge-memory">⚡ CASE-BASED ERROR MEMORY</span>
+                        <strong style="color: #F8FAFC; margin-left: 10px;">{num_cached_solutions} Verified Build Solutions Cached</strong>
+                        <span style="color: #DDD6FE; font-size: 13px; margin-left: 10px;">({total_reuses} Instant Reuses &bull; 0 Tokens &bull; &lt;1ms Fast-Path)</span>
+                    </div>
+                    <div style="font-size: 12px; color: #C084FC;">Auto-patches recurring build failures</div>
+                </div>
+            """, unsafe_allow_html=True)
+
+            with st.expander("🧠 View Case-Based Error Resolution Registry (Live Cache)"):
+                if cached_errors:
+                    for err_item in cached_errors:
+                        st.markdown(f"**`{err_item['error_signature']}`** ({err_item['error_category']}) &bull; Reused: `{err_item['times_reused']}` times &bull; Source: `{err_item['model_source']}`")
+                        st.caption(err_item['fix_description'])
+                        st.code(err_item['patch_instructions'][:350] + ("..." if len(err_item['patch_instructions']) > 350 else ""), language="dockerfile")
+                else:
+                    st.info("No error solutions cached yet. When builds fail and heal, solutions are saved here automatically.")
+
+            # 3-Tier Provisioning Tabs
+            tier_docker, tier_ssh, tier_iso = st.tabs([
+                "🐳 Tier 1: Local Container Sandbox (Docker / Vulhub)",
+                "🖥️ Tier 2: Remote SSH Sandboxes (Linux / Windows / macOS)",
+                "💿 Tier 3: Legacy OS Archival Intelligence & ISO Finder"
+            ])
+
+            # ==================================================================
+            # TIER 1: DOCKER / VULHUB ISOLATED CONTAINERS
+            # ==================================================================
+            with tier_docker:
+                # 1. Docker Daemon Status Ribbon
+                docker_online, docker_msg = docker_mgr.is_docker_available()
+                badge_class = "badge-active" if docker_online else "badge-offline"
+                badge_label = "DOCKER ENGINE ONLINE" if docker_online else "DOCKER ENGINE OFFLINE"
                 st.markdown(f"""
-                    <div class="vulhub-card">
-                        <span class="badge-tag badge-vulhub">⭐ OFFICIAL VULHUB LAB DISCOVERED</span>
-                        <h4 style="margin: 8px 0; color: #F0F9FF;">🐳 Pre-built Docker Environment Available</h4>
-                        <p style="color: #BAE6FD; font-size: 13px;">
-                            An official Vulhub reproducible container blueprint exists for this CVE.
-                        </p>
-                        <a href="{v_top['url']}" target="_blank" style="color: #38BDF8; font-weight: bold; text-decoration: underline; margin-right: 15px;">📂 Browse Vulhub Environment</a>
-                        <a href="{v_top['docker_compose_url']}" target="_blank" style="color: #7DD3FC; text-decoration: underline;">📄 View Raw docker-compose.yml</a>
+                    <div class="docker-status-card">
+                        <div>
+                            <span class="badge-tag {badge_class}">{badge_label}</span>
+                            <strong style="color: #F8FAFC; margin-left: 10px;">{docker_msg}</strong>
+                        </div>
+                        <div style="font-size: 12px; color: #94A3B8;">
+                            {'Ready for isolated container deployments' if docker_online else 'Start Docker Desktop on Windows to build & execute live containers'}
+                        </div>
                     </div>
                 """, unsafe_allow_html=True)
-            
-            lab_key = f"lab_{cve_id}"
-            if lab_key not in st.session_state:
-                cached_lab_db = db.get_lab_blueprint(cve_id)
-                if cached_lab_db:
-                    st.session_state[lab_key] = cached_lab_db
 
-            if st.button("Generate Lab Configuration Engine", key="btn_gen_lab"):
-                with st.spinner("Prompting underlying model cascade..."):
-                    lab_res = ai_engine.generate_lab_environment(cve_data)
-                    st.session_state[lab_key] = lab_res
-                    if "error" not in lab_res:
-                        db.save_lab_blueprint(cve_id, lab_res)
-                    st.rerun()
-            
-            lab_data = st.session_state.get(lab_key, None)
-            if lab_data:
-                if "error" in lab_data:
-                    st.error(lab_data["error"])
+                # Check if container is currently deployed / running
+                container_state = docker_mgr.get_container_status(cve_id)
+                is_running = container_state.get("is_running", False)
+                saved_deploy = container_state.get("saved_record") or db.get_lab_deployment(cve_id)
+
+                # Active Running Container Control Center (if running)
+                if is_running:
+                    host_port = saved_deploy.get("host_port", 8080) if saved_deploy else 8080
+                    st.markdown(f"""
+                        <div class="audit-card">
+                            <span class="badge-tag badge-active">🟢 LIVE LAB CONTAINER RUNNING</span>
+                            <h4 style="margin: 8px 0; color: #F0FDF4;">⚡ Target Sandbox Active on Port {host_port}</h4>
+                            <p style="color: #BBF7D0; font-size: 13px;">
+                                Container ID: <code>{container_state.get('container_id', 'Active')}</code> &bull; Status: <code>{container_state.get('status_text', 'Up')}</code>
+                            </p>
+                            <a href="http://localhost:{host_port}" target="_blank" style="color: #4ADE80; font-weight: bold; text-decoration: underline; margin-right: 15px;">🌐 Open Target Application (http://localhost:{host_port})</a>
+                        </div>
+                    """, unsafe_allow_html=True)
+
+                    col_stop, col_restart, col_audit, col_logs = st.columns(4)
+                    with col_stop:
+                        if st.button("⏹️ Stop Lab Container", key=f"btn_stop_{cve_id}", use_container_width=True):
+                            with st.spinner("Terminating container..."):
+                                docker_mgr.stop_lab(cve_id)
+                                st.success("Container stopped.")
+                                st.rerun()
+                    with col_restart:
+                        if st.button("🔄 Restart Lab", key=f"btn_restart_{cve_id}", use_container_width=True):
+                            with st.spinner("Restarting container..."):
+                                docker_mgr.stop_lab(cve_id)
+                                st.info("Restarted container.")
+                                st.rerun()
+                    with col_audit:
+                        if st.button("🩺 Run Health Audit", key=f"btn_audit_{cve_id}", use_container_width=True):
+                            with st.spinner("Probing container TCP and HTTP services..."):
+                                audit_res = verifier.audit_container(cve_id, host="localhost", port=host_port)
+                                st.session_state[f"audit_{cve_id}"] = audit_res
+                                if saved_deploy:
+                                    saved_deploy["audit_details"] = audit_res
+                                    saved_deploy["health_status"] = audit_res.get("health_status", "unknown")
+                                    db.save_lab_deployment(cve_id, saved_deploy)
+                                st.rerun()
+                    with col_logs:
+                        show_logs = st.button("📜 Toggle Container Logs", key=f"btn_toggle_logs_{cve_id}", use_container_width=True)
+
+                    # Show health audit results if available
+                    audit_data = st.session_state.get(f"audit_{cve_id}") or (saved_deploy.get("audit_details") if saved_deploy else None)
+                    if audit_data:
+                        st.markdown("##### 🩺 Live Service Health & Verification Audit")
+                        for chk in audit_data.get("checks", []):
+                            icon = "✅" if chk.get("passed") else "❌"
+                            st.markdown(f"{icon} **{chk.get('name')}**: `{chk.get('detail')}`")
+
+                    # Container live logs
+                    if show_logs or st.session_state.get(f"show_logs_{cve_id}", False):
+                        st.session_state[f"show_logs_{cve_id}"] = True
+                        st.markdown("##### 📜 Container Real-time Stdout/Stderr")
+                        c_logs = docker_mgr.get_container_logs(cve_id, tail=60)
+                        st.code(c_logs or "No logs emitted yet.", language="text")
+
+                    st.markdown("---")
+
+                # Vulhub Environment Card (Priority Lab)
+                if vulhub_matches:
+                    v_top = vulhub_matches[0]
+                    st.markdown(f"""
+                        <div class="vulhub-card">
+                            <span class="badge-tag badge-vulhub">⭐ OFFICIAL VULHUB LAB DISCOVERED</span>
+                            <h4 style="margin: 8px 0; color: #F0F9FF;">🐳 Pre-built Docker Environment Available</h4>
+                            <p style="color: #BAE6FD; font-size: 13px;">
+                                An official Vulhub reproducible container blueprint exists for this CVE.
+                            </p>
+                            <a href="{v_top['url']}" target="_blank" style="color: #38BDF8; font-weight: bold; text-decoration: underline; margin-right: 15px;">📂 Browse Vulhub Environment</a>
+                            <a href="{v_top['docker_compose_url']}" target="_blank" style="color: #7DD3FC; text-decoration: underline;">📄 View Raw docker-compose.yml</a>
+                        </div>
+                    """, unsafe_allow_html=True)
+
+                    if not is_running:
+                        col_v1, col_v2 = st.columns([3, 1])
+                        with col_v1:
+                            if st.button("🐳 Deploy Verified Vulhub Container Environment", key=f"btn_deploy_vulhub_{cve_id}", use_container_width=True):
+                                if not docker_online:
+                                    st.warning("⚠️ Docker Desktop is currently offline. Please start Docker Desktop on Windows to deploy live containers.")
+                                else:
+                                    with st.status(f"Deploying Vulhub environment for {cve_id}...", expanded=True) as status_box:
+                                        def update_status(msg):
+                                            status_box.write(f"&bull; {msg}")
+                                        v_res = docker_mgr.deploy_vulhub_lab(cve_id, v_top['docker_compose_url'], progress_cb=update_status)
+                                        if v_res.get("success"):
+                                            status_box.update(label="Vulhub Lab Deployed Successfully!", state="complete")
+                                            st.success(f"Lab is active at: {v_res.get('url')}")
+                                            st.rerun()
+                                        else:
+                                            status_box.update(label="Vulhub Deployment Failed", state="error")
+                                            st.error(v_res.get("error", "Deployment failed."))
+
+                # Blueprint Generation & Deployment with AI Self-Healing
+                lab_key = f"lab_{cve_id}"
+                if lab_key not in st.session_state:
+                    cached_lab_db = db.get_lab_blueprint(cve_id)
+                    if cached_lab_db:
+                        st.session_state[lab_key] = cached_lab_db
+
+                col_btn1, col_btn2 = st.columns([2, 3])
+                with col_btn1:
+                    if st.button("Generate Lab Configuration Engine", key="btn_gen_lab", use_container_width=True):
+                        with st.spinner("Prompting underlying model cascade..."):
+                            lab_res = ai_engine.generate_lab_environment(cve_data)
+                            st.session_state[lab_key] = lab_res
+                            if "error" not in lab_res:
+                                db.save_lab_blueprint(cve_id, lab_res)
+                            st.rerun()
+
+                lab_data = st.session_state.get(lab_key, None)
+                if lab_data:
+                    if "error" in lab_data:
+                        st.error(lab_data["error"])
+                    else:
+                        if lab_data.get("generated_by"):
+                            st.caption(f"⚡ Blueprint generated via: **{lab_data.get('generated_by')}** &bull; Cached in SQLite")
+
+                        st.markdown(f"### Lab Complexity: `{lab_data.get('lab_difficulty', 'Medium')}`")
+                        dockerfile_text = lab_data.get("docker_recommendation", "# No docker snippet returned")
+                        st.code(dockerfile_text, language="dockerfile", line_numbers=True)
+
+                        # Deployment Action Panel with Self-Healing Option
+                        if not is_running:
+                            st.markdown("#### 🚀 Automated Container Sandbox Provisioning")
+                            auto_heal_enabled = st.checkbox(
+                                "🩹 Enable Closed-Loop AI Self-Healing Agent (Fast-path memory + multi-turn repair)",
+                                value=True,
+                                key=f"chk_heal_{cve_id}",
+                                help="Queries Error Memory Registry (<1ms) first. If novel error, prompts LLM to analyze stderr and patch Dockerfile."
+                            )
+
+                            ports_list = lab_data.get("ports", [80])
+                            target_p = int(ports_list[0]) if ports_list and str(ports_list[0]).isdigit() else 80
+
+                            if st.button("🚀 Deploy Blueprint via Docker (Build, Run & Self-Heal)", key=f"btn_deploy_blueprint_{cve_id}", use_container_width=True):
+                                if not docker_online:
+                                    st.warning("⚠️ Docker Desktop is currently offline. Please start Docker Desktop on Windows to build and run live containers.")
+                                else:
+                                    with st.status(f"Building isolated container for {cve_id}...", expanded=True) as build_box:
+                                        def update_build(msg):
+                                            build_box.write(f"&bull; {msg}")
+
+                                        deploy_res = docker_mgr.build_and_deploy_blueprint(
+                                            cve_id=cve_id,
+                                            dockerfile_content=dockerfile_text,
+                                            target_port=target_p,
+                                            auto_heal=auto_heal_enabled,
+                                            max_retries=3,
+                                            progress_cb=update_build
+                                        )
+
+                                        if deploy_res.get("success"):
+                                            build_box.update(label="Container Built and Running Successfully!", state="complete")
+                                            st.success(f"Lab is active at: {deploy_res.get('url')} (Repairs applied: {deploy_res.get('repair_count', 0)})")
+                                            st.rerun()
+                                        else:
+                                            build_box.update(label="Build / Deployment Failed", state="error")
+                                            st.error(deploy_res.get("error", "Build failed."))
+                                            if deploy_res.get("full_log"):
+                                                with st.expander("View Full Build Stderr Log"):
+                                                    st.code(deploy_res["full_log"], language="text")
+
+                        # Self-Healing Telemetry & History (if repairs occurred)
+                        repairs = saved_deploy.get("repair_history", []) if saved_deploy else []
+                        if repairs:
+                            st.markdown("---")
+                            with st.expander(f"🩹 AI Self-Healing Telemetry ({len(repairs)} Patches Applied)", expanded=True):
+                                for r_idx, rep in enumerate(repairs, 1):
+                                    badge_type = "badge-memory" if rep.get("cache_hit") else "badge-repaired"
+                                    tag_text = "MEMORY REGISTRY (<1ms)" if rep.get("cache_hit") else f"ITERATION {rep.get('attempt', r_idx)} REPAIR"
+                                    st.markdown(f"""
+                                        <div class="healing-card">
+                                            <span class="badge-tag {badge_type}">{tag_text}</span>
+                                            <strong style="color: #F8FAFC; margin-left: 8px;">Source: {rep.get('model_used', 'AI Cascade')} &bull; Category: {rep.get('error_category', 'build_error')}</strong>
+                                            <p style="color: #DDD6FE; font-size: 13px; margin: 8px 0;"><b>Diagnosis:</b> {rep.get('diagnosis', 'N/A')}</p>
+                                            <p style="color: #A78BFA; font-size: 13px; margin-bottom: 8px;"><b>Fix Applied:</b> {rep.get('fix_description', 'N/A')}</p>
+                                        </div>
+                                    """, unsafe_allow_html=True)
+                                    if rep.get("diff"):
+                                        st.caption("Unified Patch Diff (Dockerfile.failed ➔ Dockerfile.repaired):")
+                                        st.code(rep["diff"], language="diff")
+
+                        st.markdown("---")
+                        st.write(f"**VM Deployment Environment Setup:** {lab_data.get('vm_recommendation', 'N/A')}")
+                        st.write(f"**Open Infrastructure target ports required:** `{lab_data.get('ports', [80])}`")
+                        st.write(f"**Static System Credentials:** `{lab_data.get('credentials', 'Default')}`")
+
+                        st.markdown("#### Execution Workflow Sequences")
+                        for step in lab_data.get("installation_steps", []):
+                            st.markdown(f"- {step}")
+                        st.markdown("#### Post-Exploitation Verification Audits")
+                        for check in lab_data.get("verification_steps", []):
+                            st.markdown(f"- `{check}`")
+
+            # ==================================================================
+            # TIER 2: REMOTE SSH SANDBOXES (LINUX / WINDOWS / MACOS)
+            # ==================================================================
+            with tier_ssh:
+                st.markdown("### 🖥️ Tri-OS Remote SSH Sandbox Engine")
+                st.caption("Execute reproduction scripts on dedicated remote physical or virtual machines over SSH when vulnerabilities cannot run in containers (e.g. kernel flaws, Windows services, or macOS daemons).")
+
+                sandboxes = ssh_sandbox.get_configured_sandboxes()
+                target_choice = st.radio(
+                    "Select Target Operating System Sandbox:",
+                    ["linux", "windows", "macos"],
+                    format_func=lambda x: {
+                        "linux": "🐧 Linux Target Sandbox (Ubuntu / Debian / RHEL)",
+                        "windows": "🪟 Windows Target Sandbox (Win 10/11 / Server)",
+                        "macos": "🍎 macOS Target Sandbox (Darwin / Apple Silicon)"
+                    }[x],
+                    horizontal=True,
+                    key="sel_ssh_target"
+                )
+
+                selected_cfg = sandboxes[target_choice]
+
+                # Connection Status Box
+                col_box, col_probe = st.columns([3, 1])
+                with col_box:
+                    if selected_cfg["configured"]:
+                        st.markdown(f"""
+                            <div class="sandbox-card">
+                                <span class="badge-tag badge-ssh">CONFIGURED TARGET</span>
+                                <strong style="color: #F8FAFC; margin-left: 8px;">{selected_cfg['name']} &bull; {selected_cfg['host']}:{selected_cfg['port']}</strong>
+                                <div style="font-size: 13px; color: #94A3B8; margin-top: 6px;">
+                                    User: <code>{selected_cfg['username']}</code> &bull; Shell: <code>{selected_cfg['default_shell']}</code>
+                                    {f" &bull; Note: <em>{selected_cfg['custom_info']}</em>" if selected_cfg.get('custom_info') else ''}
+                                </div>
+                            </div>
+                        """, unsafe_allow_html=True)
+                    else:
+                        st.markdown(f"""
+                            <div style="background: rgba(30, 41, 59, 0.6); border: 1px dashed rgba(245, 158, 11, 0.4); border-radius: 10px; padding: 12px 18px; margin-bottom: 12px;">
+                                <span class="badge-tag badge-offline">UNCONFIGURED</span>
+                                <strong style="color: #F8FAFC; margin-left: 8px;">{selected_cfg['name']} is not configured in .env</strong>
+                                <p style="color: #CBD5E1; font-size: 13px; margin: 6px 0 0 0;">
+                                    To enable this target, set in <code>.env</code>: <code>SANDBOX_{target_choice.upper()}_HOST</code>, <code>SANDBOX_{target_choice.upper()}_USER</code>, and <code>SANDBOX_{target_choice.upper()}_PASS</code>.
+                                </p>
+                            </div>
+                        """, unsafe_allow_html=True)
+
+                with col_probe:
+                    probe_key = f"probe_{target_choice}"
+                    if st.button(f"🔍 Probe {target_choice.title()} OS", key=f"btn_probe_{target_choice}", use_container_width=True):
+                        with st.spinner("Connecting via SSH & fingerprinting operating system..."):
+                            probe_res = ssh_sandbox.test_connection(target_choice)
+                            st.session_state[probe_key] = probe_res
+                            st.rerun()
+
+                # Display Probe Fingerprint Results if available
+                cached_probe = st.session_state.get(f"probe_{target_choice}")
+                if cached_probe:
+                    if cached_probe.get("connected"):
+                        fp = cached_probe.get("fingerprint", {})
+                        st.success(f"✅ Reachable! Detected: **{cached_probe.get('summary')}** &bull; Kernel: `{fp.get('kernel', 'N/A')}` &bull; Python: `{fp.get('python_version', 'N/A')}` &bull; Ping: `{cached_probe.get('latency_ms')}ms`")
+                    else:
+                        st.error(f"❌ Connection Failed: {cached_probe.get('error')}")
+
+                st.markdown("---")
+                st.markdown(f"#### 📜 Remote Reproduction Script ({target_choice.upper()})")
+
+                # Prepare default script based on OS and AI blueprint
+                lab_cached = st.session_state.get(f"lab_{cve_id}") or db.get_lab_blueprint(cve_id)
+                default_script = ""
+                if target_choice == "windows":
+                    default_script = (
+                        f"# Automated PowerShell Replication Script for {cve_id}\n"
+                        f"# Target: Windows Remote Host\n\n"
+                        f"Write-Host '[+] Initializing Vulnerability Environment for {cve_id}...' -ForegroundColor Cyan\n"
+                    )
+                    if lab_cached and lab_cached.get("installation_steps"):
+                        for step in lab_cached["installation_steps"]:
+                            default_script += f"Write-Host '[*] {step}'\n"
+                    default_script += (
+                        "\n# Service Verification Probe\n"
+                        "Get-Service | Select-Object -First 5\n"
+                        f"Write-Host '[+] Environment Staged for {cve_id}' -ForegroundColor Green\n"
+                    )
                 else:
-                    if lab_data.get("generated_by"):
-                        st.caption(f"⚡ Blueprint generated via: **{lab_data.get('generated_by')}** &bull; Cached in SQLite")
-                    
-                    st.markdown(f"### Lab Complexity: `{lab_data.get('lab_difficulty', 'Medium')}`")
-                    st.code(lab_data.get("docker_recommendation", "# No docker snippet returned"), language="dockerfile", line_numbers=True)
-                    st.write(f"**VM Deployment Environment Setup:** {lab_data.get('vm_recommendation', 'N/A')}")
-                    st.write(f"**Open Infrastructure target ports required:** `{lab_data.get('ports', [80])}`")
-                    st.write(f"**Static System Credentials:** `{lab_data.get('credentials', 'Default')}`")
-                    
-                    st.markdown("#### Execution Workflow Sequences")
-                    for step in lab_data.get("installation_steps", []):
-                        st.markdown(f"- {step}")
-                    st.markdown("#### Post-Exploitation Verification Audits")
-                    for check in lab_data.get("verification_steps", []):
-                        st.markdown(f"- `{check}`")
+                    default_script = (
+                        f"#!/usr/bin/env bash\n"
+                        f"# Automated Bash Replication Script for {cve_id}\n"
+                        f"# Target: {target_choice.title()} Remote Host\n"
+                        f"set -e\n\n"
+                        f"echo '[+] Initializing Lab Replication for {cve_id}...'\n"
+                    )
+                    if lab_cached and lab_cached.get("installation_steps"):
+                        for step in lab_cached["installation_steps"]:
+                            clean_step = step.replace('"', '\\"')
+                            default_script += f"echo '[*] {clean_step}'\n"
+                    default_script += (
+                        f"\necho '[+] Lab Environment Configuration Complete for {cve_id}.'\n"
+                    )
+
+                script_input = st.text_area(
+                    "Execution Script Content (Editable):",
+                    value=default_script,
+                    height=200,
+                    key=f"txt_script_{target_choice}"
+                )
+
+                if st.button(f"🚀 Deploy & Execute on {target_choice.title()} Sandbox", key=f"btn_exec_{target_choice}", use_container_width=True):
+                    if not selected_cfg["configured"]:
+                        st.warning(f"⚠️ {selected_cfg['name']} is unconfigured. Please define connection settings in .env first.")
+                    else:
+                        with st.status(f"Executing lab script on {selected_cfg['name']} ({selected_cfg['host']})...", expanded=True) as exec_box:
+                            def progress(m):
+                                exec_box.write(f"&bull; {m}")
+                            progress("Establishing authenticated SSH tunnel...")
+                            progress(f"Staging script on remote filesystem...")
+                            exec_res = ssh_sandbox.execute_script(target_choice, script_input, cve_id=cve_id)
+
+                            if exec_res.get("success"):
+                                exec_box.update(label="Script Executed Successfully!", state="complete")
+                                st.success(f"Execution Succeeded! (Exit Code: {exec_res.get('exit_code')} &bull; Runtime: {exec_res.get('duration_sec')}s)")
+                            else:
+                                exec_box.update(label="Execution Failed / Non-Zero Exit Code", state="error")
+                                st.error(f"Execution Error: {exec_res.get('error', 'Script returned non-zero code.')}")
+
+                            tab_out, tab_err = st.tabs(["Stdout Stream", "Stderr Stream"])
+                            with tab_out:
+                                st.code(exec_res.get("stdout") or "No stdout emitted.", language="text")
+                            with tab_err:
+                                st.code(exec_res.get("stderr") or "No stderr emitted.", language="text")
+
+            # ==================================================================
+            # TIER 3: LEGACY OS ARCHIVAL INTELLIGENCE & ISO FINDER
+            # ==================================================================
+            with tier_iso:
+                st.markdown("### 💿 Legacy OS Archival Intelligence & ISO Finder")
+                st.caption("When vulnerability requirements cannot be satisfied by Docker containers or the current remote machines (e.g. vintage Linux kernels < 3.x, retired glibc versions, or legacy Windows Server 2008/2012), automatically surface official archive mirror ISOs and VM hypervisor configurations.")
+
+                matched_isos = os_archives.match_legacy_os(cve_data)
+                st.markdown(f"#### 🎯 Recommended Historical Environments for `{cve_id}` ({len(matched_isos)} Matched)")
+
+                for iso_item in matched_isos:
+                    st.markdown(f"""
+                        <div class="iso-card">
+                            <span class="badge-tag badge-iso">ARCHIVE MIRROR VERIFIED</span>
+                            <h4 style="margin: 8px 0; color: #FEF3C7;">💿 {iso_item['name']}</h4>
+                            <div style="font-size: 13px; color: #FDE68A; margin-bottom: 8px;">
+                                <strong>Kernel / Build:</strong> <code>{iso_item['kernel_version']}</code> &bull; 
+                                <strong>Architecture:</strong> <code>{iso_item['architecture']}</code> &bull; 
+                                <strong>Released:</strong> {iso_item['release_date']} &bull; 
+                                <strong>EOL:</strong> {iso_item['eol_date']}
+                            </div>
+                            <div style="font-size: 12px; color: #CBD5E1; margin-bottom: 10px;">
+                                <strong>Match Reason:</strong> {', '.join(iso_item.get('match_reasons', []))}
+                            </div>
+                            <a href="{iso_item['iso_url']}" target="_blank" style="display: inline-block; background: #D97706; color: #FFFFFF; font-weight: bold; padding: 6px 14px; border-radius: 6px; text-decoration: none; margin-right: 12px; font-size: 13px;">📥 Download ISO ({iso_item['distribution']})</a>
+                            <a href="{iso_item['mirror_portal']}" target="_blank" style="color: #FBBF24; text-decoration: underline; font-size: 13px;">📂 Open Official Archive Directory</a>
+                        </div>
+                    """, unsafe_allow_html=True)
+
+                    with st.expander(f"⚙️ View VM Hardware Profile & Archive Repository Config for {iso_item['name']}"):
+                        vm_prof = iso_item.get("vm_profile", {})
+                        col_vm1, col_vm2, col_vm3 = st.columns(3)
+                        with col_vm1:
+                            st.metric("Recommended RAM", f"{vm_prof.get('ram_mb', 2048)} MB")
+                        with col_vm2:
+                            st.metric("Virtual CPUs", f"{vm_prof.get('vcpus', 2)} Cores")
+                        with col_vm3:
+                            st.metric("Hard Disk Space", f"{vm_prof.get('disk_gb', 25)} GB")
+
+                        st.markdown("**Network Containment:** `Host-Only Adapter (Isolated Lab Subnet)`")
+                        if iso_item.get("apt_sources_snippet"):
+                            st.markdown("**Archive Package Repository Configuration (Fix for 404 EOL Mirrors):**")
+                            st.code(iso_item["apt_sources_snippet"], language="bash")
+
+                        # Hypervisor copy-paste setup
+                        guides = os_archives.get_setup_instructions(iso_item["id"])
+                        if guides:
+                            st.markdown("**Quick Setup Guide:**")
+                            st.text(guides.get("virtualbox", ""))
+
+                st.markdown("---")
+                with st.expander("📚 Search Full Historical Operating System Catalog"):
+                    search_q = st.text_input("Filter historical catalog (e.g. 'Ubuntu 14', 'Debian 8', 'CentOS 6', 'Windows 2008'):", key="iso_catalog_search")
+                    catalog_results = os_archives.search_catalog(search_q)
+                    st.caption(f"Showing {len(catalog_results)} historical OS releases")
+                    for cat_item in catalog_results:
+                        st.markdown(f"- **{cat_item['name']}** (`{cat_item['kernel_version']}`) &bull; [Direct ISO]({cat_item['iso_url']}) &bull; [Archive Mirror]({cat_item['mirror_portal']})")
 
         # --- TAB 4: POCS / BLOGS (Priority Order: Vulhub -> Feeds -> GitHub) ---
         with tab_pocs_blogs:
@@ -448,12 +844,42 @@ if cve_id:
             st.caption(f"Database File: `vulnerability_intel.db` (SQLite 3 WAL Mode)")
 
             tab_db_stats = db.get_platform_stats()
-            s_col1, s_col2, s_col3, s_col4, s_col5 = st.columns(5)
+            s_col1, s_col2, s_col3, s_col4, s_col5, s_col6, s_col7 = st.columns(7)
             s_col1.metric("CVEs Stored", tab_db_stats["total_cves"])
             s_col2.metric("GitHub PoCs", tab_db_stats["total_pocs"])
             s_col3.metric("Exploit Feeds", tab_db_stats["total_exploits"])
             s_col4.metric("Lab Blueprints", tab_db_stats["total_labs"])
             s_col5.metric("AI Briefings", tab_db_stats["total_ai_analyses"])
+            s_col6.metric("Deployed Labs", tab_db_stats.get("total_deployed", 0))
+            s_col7.metric("Error Memory", tab_db_stats.get("total_error_solutions", 0))
+
+            # Deployed Labs Section
+            deployed_list = db.get_all_deployed_labs()
+            if deployed_list:
+                st.markdown("---")
+                st.markdown("#### 🐳 Active & Deployed Lab Environments")
+                for dep in deployed_list:
+                    d_col1, d_col2, d_col3, d_col4 = st.columns([2, 4, 2, 2])
+                    with d_col1:
+                        st.markdown(f"**`{dep['cve_id']}`**")
+                        status_badge = "badge-active" if dep['status'] == 'running' else "badge-info"
+                        st.markdown(f"<span class='badge-tag {status_badge}'>{dep['status'].upper()}</span>", unsafe_allow_html=True)
+                    with d_col2:
+                        st.write(f"Type: `{dep['deployment_type']}` &bull; Container: `{dep['container_name']}`")
+                        st.caption(f"Health: `{dep['health_status']}` | Updated: {dep['updated_at']}")
+                    with d_col3:
+                        if dep.get('host_port'):
+                            st.markdown(f"Port: [`{dep['host_port']}`](http://localhost:{dep['host_port']})")
+                    with d_col4:
+                        if dep['status'] == 'running':
+                            if st.button("⏹️ Stop", key=f"stop_tab7_{dep['cve_id']}", use_container_width=True):
+                                docker_mgr.stop_lab(dep['cve_id'])
+                                st.rerun()
+                        else:
+                            if st.button("🗑️ Remove", key=f"rm_tab7_{dep['cve_id']}", use_container_width=True):
+                                db.delete_lab_deployment(dep['cve_id'])
+                                st.rerun()
+                    st.markdown("<hr style='margin: 4px 0; border-color: rgba(255,255,255,0.05);'>", unsafe_allow_html=True)
 
             st.markdown("---")
             st.markdown("#### 📑 Stored Vulnerability Dossiers")
